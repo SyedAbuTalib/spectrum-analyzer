@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Spectrum Analyzer (No AnalyserNode)</title>
+    <style>
+      :root {
+        --bg: #0f1117;
+        --panel: #171b24;
+        --border: #2a3142;
+        --text: #e6ebf5;
+        --muted: #8b95ab;
+        --accent: #4cc9f0;
+        --accent-2: #f72585;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px 20px;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.25rem;
+        font-weight: 600;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      .stats strong {
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: 1fr 290px;
+        gap: 16px;
+        align-items: start;
+      }
+
+      @media (max-width: 960px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .canvases {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+
+      .legend {
+        font-size: 0.8rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: #0b0d12;
+        border-radius: 4px;
+      }
+
+      .controls {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      fieldset {
+        margin: 0;
+        padding: 12px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      legend {
+        padding: 0 6px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      label[hidden] {
+        display: none;
+      }
+
+      output {
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+      }
+
+      select,
+      input[type="file"],
+      button {
+        font: inherit;
+        color: var(--text);
+        background: #0b0d12;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 6px 8px;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+      }
+
+      .button-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 4px;
+      }
+
+      button {
+        cursor: pointer;
+        font-weight: 500;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+      }
+
+      button.active {
+        background: #1b3142;
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      #status-msg {
+        font-size: 0.8rem;
+        color: #f4a261;
+        min-height: 1.1em;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Spectrum Analyzer</h1>
+      <div id="stats" class="stats">
+        <span>Sample rate: <strong id="stat-sr">—</strong></span>
+        <span>Bin width (Δf): <strong id="stat-df">—</strong></span>
+        <span>Nyquist: <strong id="stat-nyquist">—</strong></span>
+        <span>Peak: <strong id="stat-peak">—</strong></span>
+        <span>DSP time: <strong id="stat-time">—</strong></span>
+      </div>
+    </header>
+
+    <main>
+      <section class="canvases">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Time Domain (PCM Samples)</h2>
+            <span class="legend">cyan: raw · magenta: windowed</span>
+          </div>
+          <canvas id="waveform" width="960" height="180"></canvas>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Frequency Domain (Spectrum)</h2>
+            <span id="hover-readout" class="legend">hover to inspect bin</span>
+          </div>
+          <canvas id="spectrum" width="960" height="340"></canvas>
+        </div>
+      </section>
+
+      <aside class="controls">
+        <fieldset>
+          <legend>Signal Source</legend>
+
+          <label>
+            Input
+            <select id="source-type">
+              <option value="sine">Sine Wave</option>
+              <option value="two-tone">Two Sine Waves</option>
+              <option value="square">Square Wave</option>
+              <option value="sawtooth">Sawtooth Wave</option>
+              <option value="noise">White Noise</option>
+              <option value="mic">Microphone</option>
+              <option value="file">Audio File</option>
+            </select>
+          </label>
+
+          <label id="freq1-control">
+            <span>Frequency 1: <output id="freq1-value">440 Hz</output></span>
+            <input id="freq1" type="range" min="20" max="10000" step="1" value="440" />
+          </label>
+
+          <label id="freq2-control" hidden>
+            <span>Frequency 2: <output id="freq2-value">660 Hz</output></span>
+            <input id="freq2" type="range" min="20" max="10000" step="1" value="660" />
+          </label>
+
+          <label id="file-control" hidden>
+            Choose audio file
+            <input id="audio-file" type="file" accept="audio/*" />
+          </label>
+
+          <div class="button-row">
+            <button id="toggle-run" type="button">Pause</button>
+            <button id="toggle-audio" type="button">Unmute</button>
+          </div>
+          <div id="status-msg"></div>
+        </fieldset>
+
+        <fieldset>
+          <legend>DSP Parameters</legend>
+
+          <label>
+            Transform
+            <select id="transform-type">
+              <option value="fft">Radix-2 FFT — O(N log N)</option>
+              <option value="dft">Naive DFT — O(N²)</option>
+            </select>
+          </label>
+
+          <label>
+            Frame Size (N)
+            <select id="fft-size">
+              <option value="128">128</option>
+              <option value="256">256</option>
+              <option value="512">512</option>
+              <option value="1024" selected>1024</option>
+              <option value="2048">2048</option>
+              <option value="4096">4096</option>
+            </select>
+          </label>
+
+          <label>
+            Window Function
+            <select id="window-type">
+              <option value="hann" selected>Hann</option>
+              <option value="hamming">Hamming</option>
+              <option value="blackman">Blackman</option>
+              <option value="rectangular">Rectangular (None)</option>
+            </select>
+          </label>
+
+          <label>
+            Magnitude Scale
+            <select id="mag-scale">
+              <option value="db" selected>Decibels (dB)</option>
+              <option value="linear">Linear</option>
+            </select>
+          </label>
+
+          <label>
+            Frequency Axis
+            <select id="freq-scale">
+              <option value="log" selected>Logarithmic</option>
+              <option value="linear">Linear</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Smoothing (α): <output id="smoothing-value">0.70</output></span>
+            <input id="smoothing" type="range" min="0" max="0.95" step="0.05" value="0.7" />
+          </label>
+        </fieldset>
+      </aside>
+    </main>
+
+    <script>
+      const MIN_DB = -100;
+      const MAX_DB = 0;
+      const MIN_LOG_FREQ = 20;
+
+      const DSP = {
+        createWindow(type, n) {
+          const w = new Float32Array(n);
+          const denom = n - 1;
+          for (let i = 0; i < n; i++) {
+            if (type === "rectangular") {
+              w[i] = 1;
+            } else if (type === "hann") {
+              w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / denom));
+            } else if (type === "hamming") {
+              w[i] = 0.54 - 0.46 * Math.cos((2 * Math.PI * i) / denom);
+            } else if (type === "blackman") {
+              w[i] =
+                0.42 -
+                0.5 * Math.cos((2 * Math.PI * i) / denom) +
+                0.08 * Math.cos((4 * Math.PI * i) / denom);
+            }
+          }
+          return w;
+        },
+
+        applyWindow(samples, win) {
+          const n = samples.length;
+          const out = new Float32Array(n);
+          let sum = 0;
+          for (let i = 0; i < n; i++) {
+            out[i] = samples[i] * win[i];
+            sum += win[i];
+          }
+          return { windowed: out, windowSum: sum };
+        },
+
+        naiveDft(samples) {
+          const N = samples.length;
+          const numberOfBins = N / 2 + 1;
+          const real = new Float32Array(numberOfBins);
+          const imaginary = new Float32Array(numberOfBins);
+
+          for(let k =0; k< numberOfBins; k++) {
+            let totalRealSum = 0;
+            let totalImaginarySum = 0;
+            for(let i=0; i<N; i++) {
+              const angle = 2 * Math.PI * k * i / N;
+              totalRealSum += samples[i] * Math.cos(angle);
+              totalImaginarySum -= samples[i] * Math.sin(angle);
+            }
+            real[k] = totalRealSum;
+            imaginary[k] = totalImaginarySum;
+          }
+          console.log('returning', {real, imaginary});
+          return {re: real, im: imaginary};
+        },
+
+        radix2Fft(samples) {
+          const n = samples.length;
+          const re = new Float32Array(samples);
+          const im = new Float32Array(n);
+
+          for (let i = 1, j = 0; i < n; i++) {
+            let bit = n >> 1;
+            for (; j & bit; bit >>= 1) {
+              j ^= bit;
+            }
+            j ^= bit;
+            if (i < j) {
+              const tmp = re[i];
+              re[i] = re[j];
+              re[j] = tmp;
+            }
+          }
+
+          for (let len = 2; len <= n; len <<= 1) {
+            const half = len >> 1;
+            const angle = (-2 * Math.PI) / len;
+            const wLenRe = Math.cos(angle);
+            const wLenIm = Math.sin(angle);
+
+            for (let i = 0; i < n; i += len) {
+              let wRe = 1;
+              let wIm = 0;
+              for (let j = 0; j < half; j++) {
+                const evenIdx = i + j;
+                const oddIdx = evenIdx + half;
+                const uRe = re[evenIdx];
+                const uIm = im[evenIdx];
+                const vRe = re[oddIdx] * wRe - im[oddIdx] * wIm;
+                const vIm = re[oddIdx] * wIm + im[oddIdx] * wRe;
+                re[evenIdx] = uRe + vRe;
+                im[evenIdx] = uIm + vIm;
+                re[oddIdx] = uRe - vRe;
+                im[oddIdx] = uIm - vIm;
+                const nextWRe = wRe * wLenRe - wIm * wLenIm;
+                wIm = wRe * wLenIm + wIm * wLenRe;
+                wRe = nextWRe;
+              }
+            }
+          }
+
+          const bins = n / 2 + 1;
+          return { re: re.subarray(0, bins), im: im.subarray(0, bins) };
+        },
+
+        computeMagnitudes(re, im, windowSum) {
+          // console.log("re is", re);
+          // console.log("im is", im);
+          const bins = re.length;
+          const mags = new Float32Array(bins);
+          for (let k = 0; k < bins; k++) {
+            const raw = Math.hypot(re[k], im[k]);
+            const scale = k === 0 || k === bins - 1 ? 1 : 2;
+            mags[k] = (raw * scale) / windowSum;
+          }
+          return mags;
+        },
+
+        smooth(prev, current, alpha) {
+          if (!prev || prev.length !== current.length || alpha <= 0) {
+            return new Float32Array(current);
+          }
+          const out = new Float32Array(current.length);
+          const oneMinusAlpha = 1 - alpha;
+          for (let i = 0; i < current.length; i++) {
+            out[i] = alpha * prev[i] + oneMinusAlpha * current[i];
+          }
+          return out;
+        },
+
+        toDecibels(mags) {
+          const db = new Float32Array(mags.length);
+          const minMag = Math.pow(10, MIN_DB / 20);
+          for (let i = 0; i < mags.length; i++) {
+            db[i] = 20 * Math.log10(Math.max(mags[i], minMag));
+          }
+          return db;
+        },
+
+        analyze(samples, sampleRate, config, prevMags) {
+          const t0 = performance.now();
+          const n = samples.length;
+          const win = this.createWindow(config.windowType, n);
+          const { windowed, windowSum } = this.applyWindow(samples, win);
+          const { re, im } =
+            config.transformType === "dft" ? this.naiveDft(windowed) : this.radix2Fft(windowed);
+          console.log('analyze re im is:', {re, im});
+          const rawMags = this.computeMagnitudes(re, im, windowSum);
+          const mags = this.smooth(prevMags, rawMags, config.smoothing);
+          const db = this.toDecibels(mags);
+          const elapsedMs = performance.now() - t0;
+
+          let peakBin = 1;
+          for (let k = 2; k < mags.length; k++) {
+            if (mags[k] > mags[peakBin]) peakBin = k;
+          }
+
+          return {
+            windowed,
+            mags,
+            db,
+            peakBin,
+            peakFreq: (peakBin * sampleRate) / n,
+            peakDb: db[peakBin],
+            elapsedMs,
+          };
+        },
+      };
+
+      const ui = {
+        waveform: document.getElementById("waveform"),
+        spectrum: document.getElementById("spectrum"),
+        sourceType: document.getElementById("source-type"),
+        freq1: document.getElementById("freq1"),
+        freq1Val: document.getElementById("freq1-value"),
+        freq1Wrap: document.getElementById("freq1-control"),
+        freq2: document.getElementById("freq2"),
+        freq2Val: document.getElementById("freq2-value"),
+        freq2Wrap: document.getElementById("freq2-control"),
+        fileInput: document.getElementById("audio-file"),
+        fileWrap: document.getElementById("file-control"),
+        toggleRun: document.getElementById("toggle-run"),
+        toggleAudio: document.getElementById("toggle-audio"),
+        transformType: document.getElementById("transform-type"),
+        fftSize: document.getElementById("fft-size"),
+        windowType: document.getElementById("window-type"),
+        magScale: document.getElementById("mag-scale"),
+        freqScale: document.getElementById("freq-scale"),
+        smoothing: document.getElementById("smoothing"),
+        smoothingVal: document.getElementById("smoothing-value"),
+        statSr: document.getElementById("stat-sr"),
+        statDf: document.getElementById("stat-df"),
+        statNyquist: document.getElementById("stat-nyquist"),
+        statPeak: document.getElementById("stat-peak"),
+        statTime: document.getElementById("stat-time"),
+        hoverReadout: document.getElementById("hover-readout"),
+        statusMsg: document.getElementById("status-msg"),
+      };
+
+      const state = {
+        running: true,
+        audioEnabled: false,
+        sampleRate: 48000,
+        phase1: 0,
+        phase2: 0,
+        prevMags: null,
+        lastResult: null,
+        hoverX: null,
+        audioCtx: null,
+        workletNode: null,
+        gainNode: null,
+        micStream: null,
+        micSource: null,
+        fileBuffer: null,
+        filePlayOffset: 0,
+        ringBuffer: new Float32Array(8192),
+        ringWriteIdx: 0,
+      };
+
+      function isSyntheticSource(type) {
+        return type !== "mic" && type !== "file";
+      }
+
+      function generateSyntheticFrame(n) {
+        const out = new Float32Array(n);
+        const type = ui.sourceType.value;
+        const f1 = Number(ui.freq1.value);
+        const f2 = Number(ui.freq2.value);
+        const sr = state.sampleRate;
+        const inc1 = (2 * Math.PI * f1) / sr;
+        const inc2 = (2 * Math.PI * f2) / sr;
+
+        for (let i = 0; i < n; i++) {
+          if (type === "sine") {
+            out[i] = Math.sin(state.phase1);
+          } else if (type === "two-tone") {
+            out[i] = 0.5 * Math.sin(state.phase1) + 0.5 * Math.sin(state.phase2);
+          } else if (type === "square") {
+            out[i] = Math.sin(state.phase1) >= 0 ? 0.8 : -0.8;
+          } else if (type === "sawtooth") {
+            const p = (state.phase1 / (2 * Math.PI)) % 1;
+            out[i] = (2 * p - 1) * 0.8;
+          } else if (type === "noise") {
+            out[i] = Math.random() * 2 - 1;
+          }
+          state.phase1 = (state.phase1 + inc1) % (2 * Math.PI);
+          state.phase2 = (state.phase2 + inc2) % (2 * Math.PI);
+        }
+        return out;
+      }
+
+      function readRingBuffer(n) {
+        const out = new Float32Array(n);
+        const buf = state.ringBuffer;
+        const len = buf.length;
+        const start = (state.ringWriteIdx - n + len) % len;
+        for (let i = 0; i < n; i++) {
+          out[i] = buf[(start + i) % len];
+        }
+        return out;
+      }
+
+      function readFileFrame(n) {
+        if (!state.fileBuffer) return new Float32Array(n);
+        const ch = state.fileBuffer.getChannelData(0);
+        const out = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          out[i] = ch[(state.filePlayOffset + i) % ch.length];
+        }
+        state.filePlayOffset = (state.filePlayOffset + Math.floor(state.sampleRate / 60)) % ch.length;
+        return out;
+      }
+
+      async function ensureAudioContext() {
+        if (state.audioCtx) {
+          if (state.audioCtx.state === "suspended") await state.audioCtx.resume();
+          return;
+        }
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        state.audioCtx = new AudioCtx();
+        state.sampleRate = state.audioCtx.sampleRate;
+
+        const processorCode = `
+          class PcmTapProcessor extends AudioWorkletProcessor {
+            constructor() {
+              super();
+              this.mode = "passthrough";
+              this.synthType = "sine";
+              this.f1 = 440;
+              this.f2 = 660;
+              this.phase1 = 0;
+              this.phase2 = 0;
+              this.port.onmessage = (e) => {
+                Object.assign(this, e.data);
+              };
+            }
+            process(inputs, outputs) {
+              const out = outputs[0][0];
+              if (this.mode === "mic") {
+                const inp = inputs[0] && inputs[0][0];
+                if (inp) {
+                  this.port.postMessage(inp.slice());
+                }
+                if (out) out.fill(0);
+                return true;
+              }
+              if (this.mode === "synth" && out) {
+                const inc1 = (2 * Math.PI * this.f1) / sampleRate;
+                const inc2 = (2 * Math.PI * this.f2) / sampleRate;
+                for (let i = 0; i < out.length; i++) {
+                  let s = 0;
+                  if (this.synthType === "sine") s = Math.sin(this.phase1);
+                  else if (this.synthType === "two-tone") s = 0.5 * Math.sin(this.phase1) + 0.5 * Math.sin(this.phase2);
+                  else if (this.synthType === "square") s = Math.sin(this.phase1) >= 0 ? 0.5 : -0.5;
+                  else if (this.synthType === "sawtooth") s = (((this.phase1 / (2 * Math.PI)) % 1) * 2 - 1) * 0.5;
+                  else if (this.synthType === "noise") s = (Math.random() * 2 - 1) * 0.3;
+                  out[i] = s;
+                  this.phase1 = (this.phase1 + inc1) % (2 * Math.PI);
+                  this.phase2 = (this.phase2 + inc2) % (2 * Math.PI);
+                }
+                this.port.postMessage(out.slice());
+                return true;
+              }
+              return true;
+            }
+          }
+          registerProcessor("pcm-tap", PcmTapProcessor);
+        `;
+
+        const blob = new Blob([processorCode], { type: "application/javascript" });
+        const url = URL.createObjectURL(blob);
+        await state.audioCtx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+
+        state.workletNode = new AudioWorkletNode(state.audioCtx, "pcm-tap");
+        state.gainNode = state.audioCtx.createGain();
+        state.gainNode.gain.value = state.audioEnabled ? 0.2 : 0;
+        state.workletNode.connect(state.gainNode).connect(state.audioCtx.destination);
+
+        state.workletNode.port.onmessage = (e) => {
+          const chunk = e.data;
+          const buf = state.ringBuffer;
+          const len = buf.length;
+          for (let i = 0; i < chunk.length; i++) {
+            buf[state.ringWriteIdx] = chunk[i];
+            state.ringWriteIdx = (state.ringWriteIdx + 1) % len;
+          }
+        };
+      }
+
+      function syncWorkletParams() {
+        if (!state.workletNode) return;
+        const type = ui.sourceType.value;
+        state.workletNode.port.postMessage({
+          mode: type === "mic" ? "mic" : isSyntheticSource(type) && state.audioEnabled ? "synth" : "idle",
+          synthType: type,
+          f1: Number(ui.freq1.value),
+          f2: Number(ui.freq2.value),
+        });
+      }
+
+      async function enableMic() {
+        try {
+          ui.statusMsg.textContent = "";
+          await ensureAudioContext();
+          if (!state.micStream) {
+            state.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            state.micSource = state.audioCtx.createMediaStreamSource(state.micStream);
+            state.micSource.connect(state.workletNode);
+          }
+          syncWorkletParams();
+        } catch (err) {
+          ui.statusMsg.textContent = `Mic error (serve over localhost/https): ${err.message}`;
+        }
+      }
+
+      function stopMic() {
+        if (state.micStream) {
+          state.micStream.getTracks().forEach((t) => t.stop());
+          state.micStream = null;
+        }
+        if (state.micSource) {
+          state.micSource.disconnect();
+          state.micSource = null;
+        }
+      }
+
+      function drawWaveform(raw, windowed) {
+        const canvas = ui.waveform;
+        const ctx = canvas.getContext("2d");
+        const { width: w, height: h } = canvas;
+        const mid = h / 2;
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.strokeStyle = "#1f2636";
+        ctx.beginPath();
+        ctx.moveTo(0, mid);
+        ctx.lineTo(w, mid);
+        ctx.stroke();
+
+        const plot = (data, color) => {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          for (let i = 0; i < data.length; i++) {
+            const x = (i / (data.length - 1)) * w;
+            const y = mid - data[i] * (mid * 0.85);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        };
+
+        plot(raw, "rgba(76, 201, 240, 0.45)");
+        plot(windowed, "#f72585");
+      }
+
+      function freqToX(freq, nyquist, width, scale) {
+        if (scale === "linear") {
+          return (freq / nyquist) * width;
+        }
+        const f = Math.max(freq, MIN_LOG_FREQ);
+        const minLog = Math.log10(MIN_LOG_FREQ);
+        const maxLog = Math.log10(nyquist);
+        return ((Math.log10(f) - minLog) / (maxLog - minLog)) * width;
+      }
+
+      function xToFreq(x, nyquist, width, scale) {
+        const t = Math.max(0, Math.min(1, x / width));
+        if (scale === "linear") return t * nyquist;
+        const minLog = Math.log10(MIN_LOG_FREQ);
+        const maxLog = Math.log10(nyquist);
+        return Math.pow(10, minLog + t * (maxLog - minLog));
+      }
+
+      function drawSpectrum(result, sampleRate, n) {
+        const canvas = ui.spectrum;
+        const ctx = canvas.getContext("2d");
+        const { width: w, height: h } = canvas;
+        const padLeft = 48;
+        const padRight = 14;
+        const padTop = 14;
+        const padBottom = 26;
+        const plotW = w - padLeft - padRight;
+        const plotH = h - padTop - padBottom;
+        const nyquist = sampleRate / 2;
+        const freqScale = ui.freqScale.value;
+        const magScale = ui.magScale.value;
+
+        ctx.clearRect(0, 0, w, h);
+
+        ctx.font = "11px system-ui, sans-serif";
+        ctx.strokeStyle = "#1f2636";
+        ctx.fillStyle = "#8b95ab";
+        ctx.lineWidth = 1;
+
+        const yTicks =
+          magScale === "db"
+            ? [0, -20, -40, -60, -80, -100]
+            : [1.0, 0.8, 0.6, 0.4, 0.2, 0.0];
+
+        for (const val of yTicks) {
+          const norm = magScale === "db" ? (val - MIN_DB) / (MAX_DB - MIN_DB) : val;
+          const y = padTop + (1 - norm) * plotH;
+          ctx.beginPath();
+          ctx.moveTo(padLeft, y);
+          ctx.lineTo(padLeft + plotW, y);
+          ctx.stroke();
+          ctx.textAlign = "right";
+          ctx.fillText(magScale === "db" ? `${val} dB` : val.toFixed(1), padLeft - 6, y + 4);
+        }
+
+        const xTicks =
+          freqScale === "log"
+            ? [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000].filter((f) => f <= nyquist)
+            : [0, 0.2, 0.4, 0.6, 0.8, 1.0].map((t) => Math.round(t * nyquist));
+
+        ctx.textAlign = "center";
+        for (const f of xTicks) {
+          const x = padLeft + freqToX(f, nyquist, plotW, freqScale);
+          ctx.beginPath();
+          ctx.moveTo(x, padTop);
+          ctx.lineTo(x, padTop + plotH);
+          ctx.stroke();
+          const label = f >= 1000 ? `${(f / 1000).toFixed(f % 1000 === 0 ? 0 : 1)}k` : `${f}`;
+          ctx.fillText(label, x, h - 8);
+        }
+
+        const values = magScale === "db" ? result.db : result.mags;
+        const bins = values.length;
+        ctx.strokeStyle = "#4cc9f0";
+        ctx.lineWidth = 1.75;
+        ctx.beginPath();
+        let started = false;
+        for (let k = 0; k < bins; k++) {
+          const freq = (k * sampleRate) / n;
+          if (freqScale === "log" && freq < MIN_LOG_FREQ) continue;
+          const x = padLeft + freqToX(freq, nyquist, plotW, freqScale);
+          const norm =
+            magScale === "db"
+              ? Math.max(0, Math.min(1, (values[k] - MIN_DB) / (MAX_DB - MIN_DB)))
+              : Math.max(0, Math.min(1, values[k]));
+          const y = padTop + (1 - norm) * plotH;
+          if (!started) {
+            ctx.moveTo(x, y);
+            started = true;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
+
+        if (state.hoverX !== null && state.hoverX >= padLeft && state.hoverX <= padLeft + plotW) {
+          const hoverFreq = xToFreq(state.hoverX - padLeft, nyquist, plotW, freqScale);
+          const bin = Math.max(0, Math.min(bins - 1, Math.round((hoverFreq * n) / sampleRate)));
+          const binFreq = (bin * sampleRate) / n;
+          const x = padLeft + freqToX(binFreq, nyquist, plotW, freqScale);
+
+          ctx.strokeStyle = "rgba(247, 37, 133, 0.7)";
+          ctx.beginPath();
+          ctx.moveTo(x, padTop);
+          ctx.lineTo(x, padTop + plotH);
+          ctx.stroke();
+
+          ui.hoverReadout.textContent = `bin ${bin} · ${binFreq.toFixed(1)} Hz · ${result.db[bin].toFixed(1)} dB`;
+        }
+      }
+
+      function tick() {
+        if (state.running) {
+          const n = Number(ui.fftSize.value);
+          const type = ui.sourceType.value;
+          let raw;
+          if (type === "mic" || (isSyntheticSource(type) && state.audioEnabled && state.workletNode)) {
+            raw = readRingBuffer(n);
+          } else if (type === "file") {
+            raw = readFileFrame(n);
+          } else {
+            raw = generateSyntheticFrame(n);
+          }
+
+          const config = {
+            transformType: ui.transformType.value,
+            windowType: ui.windowType.value,
+            smoothing: Number(ui.smoothing.value),
+          };
+
+          const result = DSP.analyze(raw, state.sampleRate, config, state.prevMags);
+          state.prevMags = result.mags;
+          state.lastResult = result;
+
+          drawWaveform(raw, result.windowed);
+          drawSpectrum(result, state.sampleRate, n);
+
+          ui.statSr.textContent = `${state.sampleRate} Hz`;
+          ui.statDf.textContent = `${(state.sampleRate / n).toFixed(2)} Hz`;
+          ui.statNyquist.textContent = `${state.sampleRate / 2} Hz`;
+          ui.statPeak.textContent = `${result.peakFreq.toFixed(1)} Hz (${result.peakDb.toFixed(1)} dB)`;
+          ui.statTime.textContent = `${result.elapsedMs.toFixed(2)} ms`;
+        }
+        requestAnimationFrame(tick);
+      }
+
+      ui.sourceType.addEventListener("change", async () => {
+        const type = ui.sourceType.value;
+        const synth = isSyntheticSource(type);
+        ui.freq1Wrap.hidden = !synth || type === "noise";
+        ui.freq2Wrap.hidden = type !== "two-tone";
+        ui.fileWrap.hidden = type !== "file";
+        state.prevMags = null;
+
+        if (type === "mic") {
+          await enableMic();
+        } else {
+          stopMic();
+          syncWorkletParams();
+        }
+      });
+
+      ui.freq1.addEventListener("input", () => {
+        ui.freq1Val.textContent = `${ui.freq1.value} Hz`;
+        syncWorkletParams();
+      });
+
+      ui.freq2.addEventListener("input", () => {
+        ui.freq2Val.textContent = `${ui.freq2.value} Hz`;
+        syncWorkletParams();
+      });
+
+      ui.smoothing.addEventListener("input", () => {
+        ui.smoothingVal.textContent = Number(ui.smoothing.value).toFixed(2);
+      });
+
+      ui.fftSize.addEventListener("change", () => {
+        state.prevMags = null;
+      });
+
+      ui.toggleRun.addEventListener("click", () => {
+        state.running = !state.running;
+        ui.toggleRun.textContent = state.running ? "Pause" : "Resume";
+        ui.toggleRun.classList.toggle("active", !state.running);
+      });
+
+      ui.toggleAudio.addEventListener("click", async () => {
+        state.audioEnabled = !state.audioEnabled;
+        ui.toggleAudio.textContent = state.audioEnabled ? "Mute" : "Unmute";
+        ui.toggleAudio.classList.toggle("active", state.audioEnabled);
+        try {
+          ui.statusMsg.textContent = "";
+          if (state.audioEnabled) {
+            await ensureAudioContext();
+          }
+          if (state.gainNode) {
+            state.gainNode.gain.value = state.audioEnabled ? 0.2 : 0;
+          }
+          syncWorkletParams();
+        } catch (err) {
+          state.audioEnabled = false;
+          ui.toggleAudio.textContent = "Unmute";
+          ui.toggleAudio.classList.remove("active");
+          ui.statusMsg.textContent = `Audio error (serve over localhost/https): ${err.message}`;
+        }
+      });
+
+      ui.fileInput.addEventListener("change", async () => {
+        const file = ui.fileInput.files[0];
+        if (!file) return;
+        try {
+          ui.statusMsg.textContent = "";
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          const ctx = state.audioCtx || new AudioCtx();
+          const buf = await file.arrayBuffer();
+          state.fileBuffer = await ctx.decodeAudioData(buf);
+          state.sampleRate = state.fileBuffer.sampleRate;
+          state.filePlayOffset = 0;
+        } catch (err) {
+          ui.statusMsg.textContent = `Decode error: ${err.message}`;
+        }
+      });
+
+      ui.spectrum.addEventListener("mousemove", (e) => {
+        const rect = ui.spectrum.getBoundingClientRect();
+        state.hoverX = ((e.clientX - rect.left) / rect.width) * ui.spectrum.width;
+      });
+
+      ui.spectrum.addEventListener("mouseleave", () => {
+        state.hoverX = null;
+        ui.hoverReadout.textContent = "hover to inspect bin";
+      });
+
+      requestAnimationFrame(tick);
+    </script>
+  </body>
+</html>
